@@ -1,9 +1,4 @@
 ---
-# Remap/filtrage des noms de paquets pour Arch/pacman
-# - python3 -> python
-# - tldr -> tealdeer
-# - clang-tidy -> fourni par 'clang' (pas de paquet séparé)
-# - clang-format -> fourni par 'clang' (pas de paquet séparé)
 - name: Arch | Remapper/filtrer des paquets non valides (python3, tldr, clang-tidy, clang-format)
   ansible.builtin.set_fact:
     packages_common_effective: >-
