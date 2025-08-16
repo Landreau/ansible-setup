@@ -17,12 +17,12 @@
       ansible.builtin.debug:
         msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} (release={{ ansible_distribution_release | default('N/A') }}, pkg_mgr={{ ansible_pkg_mgr }})"
 
-    # Base: liste de paquets "communs" utilisée pour l'installation
+    
     - name: Init | Définir packages_common_effective par défaut
       ansible.builtin.set_fact:
         packages_common_effective: "{{ packages.common }}"
 
-    # -------- APT: gérer les locks avant toute opération --------
+    
     - name: APT | Stopper temporairement apt-daily services et timers (évite la prise de lock)
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -47,7 +47,7 @@
       until: apt_locks.rc != 0
       when: ansible_pkg_mgr == "apt"
 
-    # -------- Préparation APT (Ubuntu/Debian) --------
+    
     - name: Créer le dossier keyrings (Debian/Ubuntu)
       ansible.builtin.file:
         path: /etc/apt/keyrings
@@ -74,7 +74,7 @@
         - ansible_distribution == "Debian"
         - ansible_distribution_major_version | int == 11
 
-    # GitHub CLI repo to ensure gh is available on Debian/Ubuntu
+    
     - name: APT | Activer dépôt GitHub CLI
       ansible.builtin.include_tasks: tasks/apt-github-cli-repo.yml
       when: ansible_pkg_mgr == "apt"
@@ -85,7 +85,7 @@
         cache_valid_time: 1800
       when: ansible_pkg_mgr == "apt"
 
-    # Préseed pour éviter l'invite de wireshark-common (capture non-root)
+    
     - name: Debian/Ubuntu | Preseed wireshark pour autoriser la capture non-root
       ansible.builtin.debconf:
         name: wireshark-common
@@ -94,13 +94,13 @@
         value: "true"
       when: ansible_pkg_mgr == "apt"
 
-    # IMPORTANT APT: on enlève 'starship' du lot de base (installé via script ensuite)
+    
     - name: APT | Exclure 'starship' des paquets communs (installé via script ensuite)
       ansible.builtin.set_fact:
         packages_common_effective: "{{ packages_common_effective | difference(['starship']) }}"
       when: ansible_pkg_mgr == "apt"
 
-    # -------- Préparation Pacman (Arch) + optimisations --------
+    
     - name: Pacman | Mettre à jour cache
       community.general.pacman:
         update_cache: yes
@@ -147,7 +147,7 @@
         state: present
       when: ansible_pkg_mgr == "pacman"
 
-    # Sudoers drop-in: pacman/pacman-key sans mot de passe pour permettre yay non-interactif
+    
     - name: Sudoers | Autoriser pacman et pacman-key sans mot de passe pour l’utilisateur principal
       ansible.builtin.copy:
         dest: "/etc/sudoers.d/99-pacman-nopasswd-{{ users.primary_user }}"
@@ -158,7 +158,7 @@
         validate: "/usr/bin/visudo -cf %s"
       when: ansible_pkg_mgr == "pacman"
 
-    # Exclusions/Remplacements spécifiques Arch
+    
     - name: Arch | Exclure 'dwm' et 'wireshark' des paquets communs (installés autrement)
       ansible.builtin.set_fact:
         packages_common_effective: "{{ packages_common_effective | difference(['dwm','wireshark']) }}"
@@ -169,12 +169,12 @@
         arch_wireshark_pkg: "{{ wireshark.arch_pkg | default('wireshark-qt') }}"
       when: ansible_pkg_mgr == "pacman"
 
-    # Remaps Arch: python3->python, tldr->tealdeer, et filtrage clang-format/clang-tidy
+    
     - name: Preflight | Arch renames
       ansible.builtin.include_tasks: tasks/arch-package-renames.yml
       when: ansible_pkg_mgr == "pacman"
 
-    # Vérification non bloquante de la dispo des paquets
+   
     - name: Preflight | Vérifier disponibilité des paquets
       ansible.builtin.include_tasks: tasks/preflight-package-check.yml
 
@@ -472,7 +472,7 @@
         PATH: "/home/{{ users.primary_user }}/.fnm/bin:{{ ansible_env.PATH }}"
       changed_when: false
 
-    # -------- .NET désactivé en mode rapide --------
+    # -------- .NET désactivé --------
     - name: .NET | Skip (mode rapide)
       ansible.builtin.debug:
         msg: ".NET SDK désactivé pour accélérer la première passe."
@@ -755,7 +755,7 @@
       when:
         - not (zsh.manage_full_rc | default(false))
 
-    # -------- SUPPLÉMENTS DEV PACK: Web/JS toolchain --------
+    
     - name: Deno | Installer (Debian/Ubuntu via script)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -787,7 +787,7 @@
       when: ansible_os_family == "Debian"
       changed_when: false
 
-    # -------- SUPPLÉMENTS DEV PACK: Rust --------
+    
     - name: Rust | Installer rustup (Debian/Ubuntu, profil minimal)
       ansible.builtin.shell: |
         set -euo pipefail
