@@ -169,7 +169,7 @@
         arch_wireshark_pkg: "{{ wireshark.arch_pkg | default('wireshark-qt') }}"
       when: ansible_pkg_mgr == "pacman"
 
-    # Remaps Arch: python3->python, tldr->tealdeer
+    # Remaps Arch: python3->python, tldr->tealdeer, et filtrage clang-format/clang-tidy
     - name: Preflight | Arch renames
       ansible.builtin.include_tasks: tasks/arch-package-renames.yml
       when: ansible_pkg_mgr == "pacman"
@@ -285,6 +285,16 @@
         shell: /bin/zsh
       when: users.set_default_shell_to_zsh | default(false)
 
+    - name: Zsh | Déployer .zshrc personnalisé (si activé)
+      ansible.builtin.copy:
+        src: "{{ zsh.custom_rc_src }}"
+        dest: "/home/{{ users.primary_user }}/.zshrc"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+        backup: "{{ zsh.backup_existing | default(true) }}"
+      when: zsh.manage_full_rc | default(false)
+
     - name: Installer zap (zsh plugin manager) pour l’utilisateur
       ansible.builtin.shell: |
         set -euo pipefail
@@ -317,6 +327,8 @@
         owner: "{{ users.primary_user }}"
         group: "{{ users.primary_user }}"
         mode: "0644"
+      when:
+        - not (zsh.manage_full_rc | default(false))
 
     - name: Zsh | Init outils CLI (starship, direnv, zoxide, alias bat/eza, PATH locaux)
       ansible.builtin.blockinfile:
@@ -333,6 +345,8 @@
         owner: "{{ users.primary_user }}"
         group: "{{ users.primary_user }}"
         mode: "0644"
+      when:
+        - not (zsh.manage_full_rc | default(false))
 
     # -------- VS Code --------
     - name: VS Code | Ajouter clé Microsoft (Debian/Ubuntu)
@@ -429,6 +443,7 @@
       when:
         - features.install_fnm_node
         - node.add_shell_init | default(true)
+        - not (zsh.manage_full_rc | default(false))
 
     - name: Node | Installer la version {{ node.fnm_channel | upper }} via fnm
       ansible.builtin.shell: |
@@ -474,6 +489,8 @@
         owner: "{{ users.primary_user }}"
         group: "{{ users.primary_user }}"
         mode: "0644"
+      when:
+        - not (zsh.manage_full_rc | default(false))
 
     # -------- LunarVim --------
     - name: LunarVim | Installer via script (idempotent)
@@ -520,7 +537,26 @@
       become_user: "{{ users.primary_user }}"
       when: tmux.enable | default(true)
 
-    # -------- i3 + autotiling (Arch uniquement) --------
+    # -------- i3 + autotiling --------
+    - name: i3 | Déployer config i3 personnalisée (si activé)
+      ansible.builtin.file:
+        path: "{{ i3.target_path | regex_replace('^(.*)/[^/]+$', '\\1') }}"
+        state: directory
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0755"
+      when: i3.manage_full_config | default(false)
+
+    - name: i3 | Copier la config i3 personnalisée
+      ansible.builtin.copy:
+        src: "{{ i3.custom_config_src }}"
+        dest: "{{ i3.target_path }}"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+        backup: "{{ i3.backup_existing | default(true) }}"
+      when: i3.manage_full_config | default(false)
+
     - name: i3 | Chercher config (~/.config/i3/config)
       ansible.builtin.stat:
         path: "/home/{{ users.primary_user }}/.config/i3/config"
@@ -529,6 +565,7 @@
         - ansible_distribution == "Archlinux"
         - i3.configure_autotiling | default(true)
         - features.install_autotiling_arch
+        - not (i3.manage_full_config | default(false))
 
     - name: i3 | Chercher config (~/.i3/config)
       ansible.builtin.stat:
@@ -538,6 +575,7 @@
         - ansible_distribution == "Archlinux"
         - i3.configure_autotiling | default(true)
         - features.install_autotiling_arch
+        - not (i3.manage_full_config | default(false))
 
     - name: i3 | Déterminer chemin de config existant
       ansible.builtin.set_fact:
@@ -548,6 +586,7 @@
         - ansible_distribution == "Archlinux"
         - i3.configure_autotiling | default(true)
         - features.install_autotiling_arch
+        - not (i3.manage_full_config | default(false))
 
     - name: i3 | Ajouter autostart autotiling si config trouvée
       ansible.builtin.blockinfile:
@@ -564,6 +603,7 @@
         - i3.configure_autotiling | default(true)
         - features.install_autotiling_arch
         - i3_config_path | length > 0
+        - not (i3.manage_full_config | default(false))
 
     - name: i3 | Avertir si aucun fichier de config i3 n’a été trouvé
       ansible.builtin.debug:
@@ -573,6 +613,7 @@
         - i3.configure_autotiling | default(true)
         - features.install_autotiling_arch
         - i3_config_path | default('') | length == 0
+        - not (i3.manage_full_config | default(false))
 
     # -------- Starship config --------
     - name: Starship | Créer le dossier de config
@@ -711,6 +752,8 @@
         owner: "{{ users.primary_user }}"
         group: "{{ users.primary_user }}"
         mode: "0644"
+      when:
+        - not (zsh.manage_full_rc | default(false))
 
     # -------- SUPPLÉMENTS DEV PACK: Web/JS toolchain --------
     - name: Deno | Installer (Debian/Ubuntu via script)
@@ -779,6 +822,8 @@
         owner: "{{ users.primary_user }}"
         group: "{{ users.primary_user }}"
         mode: "0644"
+      when:
+        - not (zsh.manage_full_rc | default(false))
 
     - name: Go | Définir GOPATH et PATH
       ansible.builtin.blockinfile:
@@ -790,6 +835,8 @@
         owner: "{{ users.primary_user }}"
         group: "{{ users.primary_user }}"
         mode: "0644"
+      when:
+        - not (zsh.manage_full_rc | default(false))
 
     # -------- Conteneurs/virt désactivés en mode rapide --------
     - name: Docker/Libvirt | Skip (mode rapide)
