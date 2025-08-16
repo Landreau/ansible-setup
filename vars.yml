@@ -3,6 +3,19 @@ users:
   primary_user: "Landreau"
   set_default_shell_to_zsh: true
 
+# Contrôle du déploiement complet des configs utilisateur
+zsh:
+  manage_full_rc: true
+  custom_rc_src: "files/zsh/.zshrc"
+  backup_existing: true
+
+i3:
+  manage_full_config: true
+  custom_config_src: "files/i3/config"
+  target_path: "/home/{{ users.primary_user }}/.config/i3/config"
+  backup_existing: true
+  configure_autotiling: true
+
 # Le préflight ne bloque pas l'exécution par défaut (peut être activé à true)
 preflight_fail: false
 
@@ -37,9 +50,6 @@ tmux:
 
 lvim:
   enable: true
-
-i3:
-  configure_autotiling: true
 
 nerd_fonts:
   version: "v3.2.1"
@@ -81,8 +91,8 @@ packages:
     - gdb
     - valgrind
     - cppcheck
-    - clang-format
-    - clang-tidy
+    - clang-format     # Arch: fourni par clang (filtré)
+    - clang-tidy       # Arch: fourni par clang (filtré)
     - jq
     - yq
     - httpie
@@ -119,8 +129,8 @@ packages:
       - bat
       - gh
       - git-delta
-      - golang-go      # remplacé golang -> golang-go
-      - eza            # pour harmoniser avec Arch
+      - golang-go
+      - eza
       - openjdk-17-jdk
       - fontconfig
       - libxft-dev
