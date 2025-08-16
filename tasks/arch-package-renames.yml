@@ -1,0 +1,12 @@
+---
+# Remap des noms de paquets pour Arch/pacman
+# - python3 -> python
+# - tldr -> tealdeer
+- name: Arch | Remapper des noms de paquets communs (python3->python, tldr->tealdeer)
+  ansible.builtin.set_fact:
+    packages_common_effective: >-
+      {{
+        (packages_common_effective | default(packages.common))
+        | difference(['python3','tldr'])
+        + ['python','tealdeer']
+      }}

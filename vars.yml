@@ -1,0 +1,175 @@
+---
+users:
+  primary_user: "Landreau"
+  set_default_shell_to_zsh: true
+
+# Le préflight ne bloque pas l'exécution par défaut (peut être activé à true)
+preflight_fail: false
+
+features:
+  install_vscode: true
+  install_lunarvim: true
+  install_fnm_node: true
+  install_dotnet: false
+  install_autotiling_arch: true
+  dev_pack: true
+  containers_ecosystem: false
+  virtualization_stack: false
+  k8s_tools: false
+  install_aur_extra: false
+
+zap:
+  plugins:
+    - exa
+    - supercharge
+    - vim
+    - autosuggestions
+    - syntax-highlighting
+    - zsh-completions
+  extra_rc:
+    - export EDITOR="nvim"
+    - bindkey -v
+    - export FZF_DEFAULT_COMMAND="fd --type f --hidden --follow --exclude .git"
+    - export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+
+tmux:
+  enable: true
+
+lvim:
+  enable: true
+
+i3:
+  configure_autotiling: true
+
+nerd_fonts:
+  version: "v3.2.1"
+  family: "JetBrainsMono"
+  proof_file: "/usr/local/share/fonts/JetBrainsMonoNerd/JetBrainsMonoNerdFont-Regular.ttf"
+
+methods:
+  dotnet: "script"
+  fnm: "auto"
+  vscode_arch: "aur_bin"
+
+packages:
+  common:
+    - git
+    - curl
+    - wget
+    - tmux
+    - fzf
+    - neovim
+    - mpv
+    - zsh
+    - python3          # Arch remap -> python
+    - ripgrep
+    - make
+    - xclip
+    - gcc
+    - dwm              # Arch via yay: dwm-git
+    - unzip
+    - direnv
+    - zoxide
+    - starship         # Debian/Ubuntu via script, Arch via pacman
+    - btop
+    - tldr             # Arch remap -> tealdeer
+    - shellcheck
+    - shfmt
+    - cmake
+    - ccache
+    - bear
+    - gdb
+    - valgrind
+    - cppcheck
+    - clang-format
+    - clang-tidy
+    - jq
+    - yq
+    - httpie
+    - nmap
+    - iperf3
+    - wireshark        # Arch remap -> wireshark-qt (ou -cli)
+    - mitmproxy
+    - rofi
+    - dmenu
+    - picom
+    - feh
+    - flameshot
+    - pavucontrol
+    - xdotool
+    - kitty
+    - alacritty
+    - maven
+    - gradle
+    - tig
+    - git-lfs
+    - git-crypt
+  by_os_family:
+    Debian:
+      - build-essential
+      - g++
+      - ca-certificates
+      - gnupg
+      - fd-find
+      - pkg-config
+      - clangd
+      - python3-pip
+      - ninja-build
+      - universal-ctags
+      - bat
+      - gh
+      - git-delta
+      - golang-go      # remplacé golang -> golang-go
+      - eza            # pour harmoniser avec Arch
+      - openjdk-17-jdk
+      - fontconfig
+      - libxft-dev
+      - libx11-dev
+      - dunst
+    RedHat: []
+  by_distro:
+    Ubuntu: []
+    Debian: []
+    Archlinux:
+      - base-devel
+      - clang
+      - pacman-contrib
+      - fd
+      - pkgconf
+      - python-pip
+      - ninja
+      - ctags
+      - bat
+      - eza
+      - git-delta
+      - github-cli
+      - reflector
+      - go
+      - jdk-openjdk
+      - fontconfig
+      - ttf-jetbrains-mono-nerd
+      - ttf-firacode-nerd
+      - wezterm
+      - libxft
+      - libx11
+
+vscode:
+  deb_apt_repo: "deb [arch=amd64,arm64 signed-by=/etc/apt/keyrings/microsoft.asc] https://packages.microsoft.com/repos/code stable main"
+  apt_key_url: "https://packages.microsoft.com/keys/microsoft.asc"
+  package_name_deb: "code"
+  package_name_arch_aur: "visual-studio-code-bin"
+
+node:
+  use_fnm: true
+  fnm_channel: "lts"
+  add_shell_init: true
+
+dotnet:
+  channel: "LTS"
+  install_dir: "/home/{{ users.primary_user }}/.dotnet"
+  add_shell_init: true
+
+aur_extra_packages:
+  - bun-bin
+  - i3lock-color
+  - ngrok

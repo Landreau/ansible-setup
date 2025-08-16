@@ -1,0 +1,835 @@
+---
+- name: Provision Linux (Ubuntu/Debian, Arch) — APT non-interactif + yay (AUR) + dwm-git + sudoers pacman NOPASSWD + fix Wireshark & remaps Arch + GH CLI APT + preflight
+  hosts: localhost
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yml
+
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    APT_LISTCHANGES_FRONTEND: none
+    UCF_FORCE_CONFOLD: "1"
+    NEEDRESTART_MODE: "a"
+
+  pre_tasks:
+    - name: Afficher la distribution détectée
+      ansible.builtin.debug:
+        msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} (release={{ ansible_distribution_release | default('N/A') }}, pkg_mgr={{ ansible_pkg_mgr }})"
+
+    # Base: liste de paquets "communs" utilisée pour l'installation
+    - name: Init | Définir packages_common_effective par défaut
+      ansible.builtin.set_fact:
+        packages_common_effective: "{{ packages.common }}"
+
+    # -------- APT: gérer les locks avant toute opération --------
+    - name: APT | Stopper temporairement apt-daily services et timers (évite la prise de lock)
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - apt-daily.service
+        - apt-daily-upgrade.service
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+      when: ansible_pkg_mgr == "apt"
+      changed_when: false
+      failed_when: false
+
+    - name: APT | Attendre la libération des verrous dpkg/apt (lock-frontend, lists, archives)
+      ansible.builtin.command: >
+        fuser -s /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock
+      register: apt_locks
+      changed_when: false
+      failed_when: false
+      retries: 120
+      delay: 5
+      until: apt_locks.rc != 0
+      when: ansible_pkg_mgr == "apt"
+
+    # -------- Préparation APT (Ubuntu/Debian) --------
+    - name: Créer le dossier keyrings (Debian/Ubuntu)
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+      when: ansible_pkg_mgr == "apt"
+
+    - name: Ubuntu | Activer le dépôt 'universe' (idempotent)
+      ansible.builtin.apt_repository:
+        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} main universe"
+        state: present
+        filename: "ubuntu-universe"
+      when:
+        - ansible_pkg_mgr == "apt"
+        - ansible_distribution == "Ubuntu"
+
+    - name: Debian 11 | Activer backports
+      ansible.builtin.apt_repository:
+        repo: "deb http://deb.debian.org/debian bullseye-backports main"
+        state: present
+        filename: "bullseye-backports"
+      when:
+        - ansible_pkg_mgr == "apt"
+        - ansible_distribution == "Debian"
+        - ansible_distribution_major_version | int == 11
+
+    # GitHub CLI repo to ensure gh is available on Debian/Ubuntu
+    - name: APT | Activer dépôt GitHub CLI
+      ansible.builtin.include_tasks: tasks/apt-github-cli-repo.yml
+      when: ansible_pkg_mgr == "apt"
+
+    - name: Mettre à jour cache APT
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 1800
+      when: ansible_pkg_mgr == "apt"
+
+    # Préseed pour éviter l'invite de wireshark-common (capture non-root)
+    - name: Debian/Ubuntu | Preseed wireshark pour autoriser la capture non-root
+      ansible.builtin.debconf:
+        name: wireshark-common
+        question: wireshark-common/install-setuid
+        vtype: boolean
+        value: "true"
+      when: ansible_pkg_mgr == "apt"
+
+    # IMPORTANT APT: on enlève 'starship' du lot de base (installé via script ensuite)
+    - name: APT | Exclure 'starship' des paquets communs (installé via script ensuite)
+      ansible.builtin.set_fact:
+        packages_common_effective: "{{ packages_common_effective | difference(['starship']) }}"
+      when: ansible_pkg_mgr == "apt"
+
+    # -------- Préparation Pacman (Arch) + optimisations --------
+    - name: Pacman | Mettre à jour cache
+      community.general.pacman:
+        update_cache: yes
+      when: ansible_pkg_mgr == "pacman"
+
+    - name: Arch | Installer reflector
+      community.general.pacman:
+        name: reflector
+        state: present
+      when: ansible_pkg_mgr == "pacman"
+
+    - name: Arch | Optimiser mirrorlist avec reflector
+      ansible.builtin.command: >
+        reflector --latest 20 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
+      when: ansible_pkg_mgr == "pacman"
+      changed_when: true
+
+    - name: Arch | Activer ParallelDownloads = 5
+      ansible.builtin.lineinfile:
+        path: /etc/pacman.conf
+        regexp: '^#?ParallelDownloads\s*=\s*\d+'
+        line: 'ParallelDownloads = 5'
+        backrefs: false
+        backup: yes
+      when: ansible_pkg_mgr == "pacman"
+
+    - name: Arch | MAKEFLAGS -j4 pour makepkg
+      ansible.builtin.lineinfile:
+        path: /etc/makepkg.conf
+        regexp: '^#?MAKEFLAGS=.*'
+        line: 'MAKEFLAGS="-j4"'
+        backrefs: false
+        backup: yes
+      when: ansible_pkg_mgr == "pacman"
+
+    - name: Arch | Resynchroniser la base après optimisation miroirs
+      community.general.pacman:
+        update_cache: yes
+      when: ansible_pkg_mgr == "pacman"
+
+    - name: Arch | Installer outils AUR (base-devel, git)
+      community.general.pacman:
+        name: [base-devel, git]
+        state: present
+      when: ansible_pkg_mgr == "pacman"
+
+    # Sudoers drop-in: pacman/pacman-key sans mot de passe pour permettre yay non-interactif
+    - name: Sudoers | Autoriser pacman et pacman-key sans mot de passe pour l’utilisateur principal
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/99-pacman-nopasswd-{{ users.primary_user }}"
+        content: "{{ users.primary_user }} ALL=(root) NOPASSWD: /usr/bin/pacman, /usr/bin/pacman-key"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "/usr/bin/visudo -cf %s"
+      when: ansible_pkg_mgr == "pacman"
+
+    # Exclusions/Remplacements spécifiques Arch
+    - name: Arch | Exclure 'dwm' et 'wireshark' des paquets communs (installés autrement)
+      ansible.builtin.set_fact:
+        packages_common_effective: "{{ packages_common_effective | difference(['dwm','wireshark']) }}"
+      when: ansible_pkg_mgr == "pacman"
+
+    - name: Arch | Choisir paquet Wireshark (qt par défaut)
+      ansible.builtin.set_fact:
+        arch_wireshark_pkg: "{{ wireshark.arch_pkg | default('wireshark-qt') }}"
+      when: ansible_pkg_mgr == "pacman"
+
+    # Remaps Arch: python3->python, tldr->tealdeer
+    - name: Preflight | Arch renames
+      ansible.builtin.include_tasks: tasks/arch-package-renames.yml
+      when: ansible_pkg_mgr == "pacman"
+
+    # Vérification non bloquante de la dispo des paquets
+    - name: Preflight | Vérifier disponibilité des paquets
+      ansible.builtin.include_tasks: tasks/preflight-package-check.yml
+
+  tasks:
+    # -------- Installation de base --------
+    - name: Installer paquets de base (APT)
+      ansible.builtin.apt:
+        name: "{{ (packages_common_effective | default(packages.common))
+                 + (packages.by_distro[ansible_distribution] | default([]))
+                 + (packages.by_os_family[ansible_os_family] | default([])) }}"
+        state: present
+        update_cache: yes
+        lock_timeout: 1200
+      when: ansible_pkg_mgr == "apt"
+
+    - name: Installer paquets de base (Pacman)
+      community.general.pacman:
+        name: "{{ ((packages_common_effective | default(packages.common))
+                 + (packages.by_distro[ansible_distribution] | default([]))
+                 + (packages.by_os_family[ansible_os_family] | default([]))) | difference(['dwm','wireshark']) }}"
+        state: present
+      when: ansible_pkg_mgr == "pacman"
+
+    # -------- AUR helper: yay --------
+    - name: Arch | Vérifier la présence de yay
+      ansible.builtin.stat:
+        path: /usr/bin/yay
+      register: yay_bin
+      when: ansible_pkg_mgr == "pacman"
+
+    - name: Arch | Préparer répertoire build AUR (user)
+      ansible.builtin.file:
+        path: "/home/{{ users.primary_user }}/.local/src/aur"
+        state: directory
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0755"
+      when:
+        - ansible_pkg_mgr == "pacman"
+        - not yay_bin.stat.exists
+
+    - name: Arch | Cloner yay-bin depuis AUR
+      ansible.builtin.git:
+        repo: "https://aur.archlinux.org/yay-bin.git"
+        dest: "/home/{{ users.primary_user }}/.local/src/aur/yay-bin"
+        version: "master"
+        update: yes
+      become: true
+      become_user: "{{ users.primary_user }}"
+      when:
+        - ansible_pkg_mgr == "pacman"
+        - not yay_bin.stat.exists
+
+    - name: Arch | Construire et installer yay-bin
+      ansible.builtin.shell: |
+        set -euo pipefail
+        makepkg -si --noconfirm
+      args:
+        chdir: "/home/{{ users.primary_user }}/.local/src/aur/yay-bin"
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      when:
+        - ansible_pkg_mgr == "pacman"
+        - not yay_bin.stat.exists
+
+    # -------- dwm-git via yay --------
+    - name: Arch | Installer dwm-git via yay
+      ansible.builtin.shell: |
+        set -euo pipefail
+        yay -S --needed --noconfirm --sudoloop --answerdiff N --answerclean N dwm-git
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      register: install_dwm_git
+      changed_when: >
+        ('there is nothing to do' not in (install_dwm_git.stdout | lower)) and
+        ('there is nothing to do' not in (install_dwm_git.stderr | lower))
+      when: ansible_pkg_mgr == "pacman"
+
+    # -------- Wireshark sur Arch --------
+    - name: Arch | Installer {{ arch_wireshark_pkg }}
+      community.general.pacman:
+        name: "{{ arch_wireshark_pkg }}"
+        state: present
+      when: ansible_pkg_mgr == "pacman"
+
+    # -------- Starship — Installation sans apt (Debian/Ubuntu) --------
+    - name: Starship | Télécharger le script d'installation (sans apt)
+      ansible.builtin.get_url:
+        url: https://starship.rs/install.sh
+        dest: /tmp/starship-install.sh
+        mode: "0755"
+      when: ansible_pkg_mgr == "apt"
+
+    - name: Starship | Installer via script (dans /usr/local/bin)
+      ansible.builtin.shell: |
+        /bin/sh /tmp/starship-install.sh -y -b /usr/local/bin
+      args:
+        creates: /usr/local/bin/starship
+      when: ansible_pkg_mgr == "apt"
+
+    # -------- Config shell / outils --------
+    - name: Définir zsh comme shell par défaut pour l’utilisateur principal
+      ansible.builtin.user:
+        name: "{{ users.primary_user }}"
+        shell: /bin/zsh
+      when: users.set_default_shell_to_zsh | default(false)
+
+    - name: Installer zap (zsh plugin manager) pour l’utilisateur
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ ! -f "{{ zap_marker }}" ]; then
+          bash -lc 'curl -fsSL https://raw.githubusercontent.com/zap-zsh/zap/master/install.zsh | zsh'
+        fi
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      vars:
+        zap_marker: "/home/{{ users.primary_user }}/.local/share/zap/zap.zsh"
+      changed_when: false
+
+    - name: Zsh | Ajouter plugins zap et options dans .zshrc
+      ansible.builtin.blockinfile:
+        path: "/home/{{ users.primary_user }}/.zshrc"
+        marker: "# {mark} ANSIBLE-ZAP"
+        block: |
+          if [ -f "$HOME/.local/share/zap/zap.zsh" ]; then
+            source "$HOME/.local/share/zap/zap.zsh"
+          {% for p in zap.plugins %}
+            plug '{{ p }}'
+          {% endfor %}
+          fi
+          {% for line in zap.extra_rc %}
+          {{ line }}
+          {% endfor %}
+        create: true
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    - name: Zsh | Init outils CLI (starship, direnv, zoxide, alias bat/eza, PATH locaux)
+      ansible.builtin.blockinfile:
+        path: "/home/{{ users.primary_user }}/.zshrc"
+        marker: "# {mark} ANSIBLE-SHELL-INIT"
+        block: |
+          export PATH="$HOME/.local/bin:$PATH"
+          eval "$(starship init zsh)"
+          eval "$(direnv hook zsh)"
+          eval "$(zoxide init zsh)"
+          if command -v batcat >/dev/null 2>&1; then alias bat=batcat; fi
+          if command -v eza >/dev/null 2>&1; then alias exa=eza; fi
+        create: true
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    # -------- VS Code --------
+    - name: VS Code | Ajouter clé Microsoft (Debian/Ubuntu)
+      ansible.builtin.get_url:
+        url: "{{ vscode.apt_key_url }}"
+        dest: /etc/apt/keyrings/microsoft.asc
+        mode: "0644"
+      when:
+        - features.install_vscode
+        - ansible_pkg_mgr == "apt"
+
+    - name: VS Code | Ajouter dépôt APT (Debian/Ubuntu)
+      ansible.builtin.apt_repository:
+        repo: "{{ vscode.deb_apt_repo }}"
+        filename: "vscode"
+        state: present
+      when:
+        - features.install_vscode
+        - ansible_pkg_mgr == "apt"
+
+    - name: VS Code | Installer le paquet (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name: "{{ vscode.package_name_deb }}"
+        state: present
+        update_cache: yes
+        lock_timeout: 600
+      when:
+        - features.install_vscode
+        - ansible_pkg_mgr == "apt"
+
+    - name: VS Code | Installer via yay (Arch)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        yay -S --needed --noconfirm --sudoloop --answerdiff N --answerclean N {{ vscode.package_name_arch_aur }}
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      register: install_vscode_arch
+      changed_when: >
+        ('there is nothing to do' not in (install_vscode_arch.stdout | lower)) and
+        ('there is nothing to do' not in (install_vscode_arch.stderr | lower))
+      when:
+        - features.install_vscode
+        - ansible_distribution == "Archlinux"
+
+    # -------- FNM (Fast Node Manager) + Node LTS --------
+    - name: FNM | Déterminer méthode d’installation
+      ansible.builtin.set_fact:
+        fnm_method: >-
+          {{ (methods.fnm == 'auto')
+              | ternary((ansible_pkg_mgr == 'pacman') | ternary('system','script'), methods.fnm) }}
+
+    - name: FNM | Installer via pacman (Arch)
+      community.general.pacman:
+        name: fnm
+        state: present
+      when:
+        - features.install_fnm_node
+        - fnm_method == "system"
+
+    - name: FNM | Installer via script (Debian/Ubuntu par défaut)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ ! -x "{{ home }}/.fnm/bin/fnm" ]; then
+          curl -fsSL https://fnm.vercel.app/install | bash
+        fi
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      vars:
+        home: "/home/{{ users.primary_user }}"
+      changed_when: false
+      when:
+        - features.install_fnm_node
+        - fnm_method == "script"
+
+    - name: FNM | Définir chemin binaire
+      ansible.builtin.set_fact:
+        fnm_bin: "{{ (fnm_method == 'system') | ternary('fnm', '/home/' + users.primary_user + '/.fnm/bin/fnm') }}"
+
+    - name: FNM | Ajouter init à .zshrc
+      ansible.builtin.blockinfile:
+        path: "/home/{{ users.primary_user }}/.zshrc"
+        marker: "# {mark} ANSIBLE-FNM"
+        block: |
+          export PATH="$HOME/.fnm/bin:$PATH"
+          eval "$({{ fnm_bin }} env --use-on-cd)"
+        create: true
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+      when:
+        - features.install_fnm_node
+        - node.add_shell_init | default(true)
+
+    - name: Node | Installer la version {{ node.fnm_channel | upper }} via fnm
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ fnm_bin }} install {{ node.fnm_channel }}
+        {{ fnm_bin }} default {{ node.fnm_channel }}
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      environment:
+        PATH: "/home/{{ users.primary_user }}/.fnm/bin:{{ ansible_env.PATH }}"
+      when: features.install_fnm_node
+
+    - name: Node | Activer corepack (yarn/pnpm) pour l’utilisateur
+      ansible.builtin.shell: |
+        set -euo pipefail
+        corepack enable
+        corepack prepare pnpm@latest --activate || true
+        corepack prepare yarn@stable --activate || true
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      environment:
+        PATH: "/home/{{ users.primary_user }}/.fnm/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    # -------- .NET désactivé en mode rapide --------
+    - name: .NET | Skip (mode rapide)
+      ansible.builtin.debug:
+        msg: ".NET SDK désactivé pour accélérer la première passe."
+      when: not features.install_dotnet
+
+    # -------- PATH user-local pour lvim --------
+    - name: PATH user-local bin dans .zshrc
+      ansible.builtin.lineinfile:
+        path: "/home/{{ users.primary_user }}/.zshrc"
+        line: 'export PATH="$HOME/.local/bin:$PATH"'
+        insertafter: EOF
+        state: present
+        create: true
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    # -------- LunarVim --------
+    - name: LunarVim | Installer via script (idempotent)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ ! -x "/home/{{ user }}/.local/bin/lvim" ]; then
+          bash -lc 'curl -fsSL https://raw.githubusercontent.com/LunarVim/LunarVim/master/utils/installer/install.sh | bash -s -- -y'
+        fi
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      vars:
+        user: "{{ users.primary_user }}"
+      when: features.install_lunarvim
+      changed_when: false
+
+    - name: LunarVim | Déployer config.lua
+      ansible.builtin.copy:
+        src: "files/lvim/config.lua"
+        dest: "/home/{{ users.primary_user }}/.config/lvim/config.lua"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+      when: lvim.enable | default(true)
+
+    # -------- tmux --------
+    - name: tmux | Déployer ~/.tmux.conf
+      ansible.builtin.copy:
+        src: "files/tmux/tmux.conf"
+        dest: "/home/{{ users.primary_user }}/.tmux.conf"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+      when: tmux.enable | default(true)
+
+    - name: tmux | Installer TPM (plugin manager)
+      ansible.builtin.git:
+        repo: "https://github.com/tmux-plugins/tpm"
+        dest: "/home/{{ users.primary_user }}/.tmux/plugins/tpm"
+        version: "master"
+        update: yes
+      become: true
+      become_user: "{{ users.primary_user }}"
+      when: tmux.enable | default(true)
+
+    # -------- i3 + autotiling (Arch uniquement) --------
+    - name: i3 | Chercher config (~/.config/i3/config)
+      ansible.builtin.stat:
+        path: "/home/{{ users.primary_user }}/.config/i3/config"
+      register: i3_conf_xdg
+      when:
+        - ansible_distribution == "Archlinux"
+        - i3.configure_autotiling | default(true)
+        - features.install_autotiling_arch
+
+    - name: i3 | Chercher config (~/.i3/config)
+      ansible.builtin.stat:
+        path: "/home/{{ users.primary_user }}/.i3/config"
+      register: i3_conf_legacy
+      when:
+        - ansible_distribution == "Archlinux"
+        - i3.configure_autotiling | default(true)
+        - features.install_autotiling_arch
+
+    - name: i3 | Déterminer chemin de config existant
+      ansible.builtin.set_fact:
+        i3_config_path: >-
+          {{ (i3_conf_xdg.stat.exists | default(false)) | ternary('/home/' + users.primary_user + '/.config/i3/config',
+             (i3_conf_legacy.stat.exists | default(false)) | ternary('/home/' + users.primary_user + '/.i3/config','')) }}
+      when:
+        - ansible_distribution == "Archlinux"
+        - i3.configure_autotiling | default(true)
+        - features.install_autotiling_arch
+
+    - name: i3 | Ajouter autostart autotiling si config trouvée
+      ansible.builtin.blockinfile:
+        path: "{{ i3_config_path }}"
+        marker: "# {mark} ANSIBLE-AUTOTILING"
+        block: |
+          # Autotiling for i3
+          exec_always --no-startup-id autotiling
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+      when:
+        - ansible_distribution == "Archlinux"
+        - i3.configure_autotiling | default(true)
+        - features.install_autotiling_arch
+        - i3_config_path | length > 0
+
+    - name: i3 | Avertir si aucun fichier de config i3 n’a été trouvé
+      ansible.builtin.debug:
+        msg: "Aucune config i3 trouvée. Crée ~/.config/i3/config puis relance le playbook pour ajouter l’autotiling."
+      when:
+        - ansible_distribution == "Archlinux"
+        - i3.configure_autotiling | default(true)
+        - features.install_autotiling_arch
+        - i3_config_path | default('') | length == 0
+
+    # -------- Starship config --------
+    - name: Starship | Créer le dossier de config
+      ansible.builtin.file:
+        path: "/home/{{ users.primary_user }}/.config"
+        state: directory
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0755"
+
+    - name: Starship | Déployer ~/.config/starship.toml
+      ansible.builtin.copy:
+        src: "files/starship/starship.toml"
+        dest: "/home/{{ users.primary_user }}/.config/starship.toml"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    # -------- Nerd Fonts — JetBrainsMono --------
+    - name: Nerd Fonts | Installer JetBrainsMono (Arch via paquet)
+      community.general.pacman:
+        name: ttf-jetbrains-mono-nerd
+        state: present
+      when: ansible_distribution == "Archlinux"
+
+    - name: Nerd Fonts | Créer répertoire de police (Debian/Ubuntu)
+      ansible.builtin.file:
+        path: "/usr/local/share/fonts/JetBrainsMonoNerd"
+        state: directory
+        mode: "0755"
+      when: ansible_os_family == "Debian"
+
+    - name: Nerd Fonts | Vérifier présence d’un fichier de preuve (Debian/Ubuntu)
+      ansible.builtin.stat:
+        path: "{{ nerd_fonts.proof_file }}"
+      register: nf_proof
+      when: ansible_os_family == "Debian"
+
+    - name: Nerd Fonts | Télécharger et extraire JetBrainsMono Nerd Font (Debian/Ubuntu)
+      ansible.builtin.unarchive:
+        src: "https://github.com/ryanoasis/nerd-fonts/releases/download/{{ nerd_fonts.version }}/{{ nerd_fonts.family }}.zip"
+        dest: "/usr/local/share/fonts/JetBrainsMonoNerd"
+        remote_src: true
+      when:
+        - ansible_os_family == "Debian"
+        - not nf_proof.stat.exists
+
+    - name: Nerd Fonts | Rafraîchir le cache des polices (toutes distros)
+      ansible.builtin.command: fc-cache -f
+      changed_when: false
+
+    # -------- st-terminal — compiler avec la config --------
+    - name: st | Préparer dossier source (user)
+      ansible.builtin.file:
+        path: "/home/{{ users.primary_user }}/.local/src"
+        state: directory
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0755"
+
+    - name: st | Cloner la source officielle
+      ansible.builtin.git:
+        repo: "https://git.suckless.org/st"
+        dest: "/home/{{ users.primary_user }}/.local/src/st"
+        version: "master"
+        update: yes
+      become: true
+      become_user: "{{ users.primary_user }}"
+
+    - name: st | Déployer config.h personnalisée
+      ansible.builtin.copy:
+        src: "files/st/config.h"
+        dest: "/home/{{ users.primary_user }}/.local/src/st/config.h"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    - name: st | Compiler
+      ansible.builtin.shell: |
+        set -euo pipefail
+        make clean all
+      args:
+        chdir: "/home/{{ users.primary_user }}/.local/src/st"
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+
+    - name: st | Installer (place /usr/local/bin/st)
+      ansible.builtin.command: make install
+      args:
+        chdir: "/home/{{ users.primary_user }}/.local/src/st"
+        creates: "/usr/local/bin/st"
+
+    # -------- SUPPLÉMENTS DEV PACK: Python toolchain --------
+    - name: pipx | Installer Poetry via pipx (user)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 -m pip install --user -U pipx || true
+        python3 -m pipx ensurepath
+        python3 -m pipx install --include-deps poetry || true
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      changed_when: false
+
+    - name: uv | Installer (script officiel, user)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if ! command -v uv >/dev/null 2>&1; then
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+        fi
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      changed_when: false
+
+    - name: pyenv | Installer par git clone
+      ansible.builtin.git:
+        repo: "https://github.com/pyenv/pyenv.git"
+        dest: "/home/{{ users.primary_user }}/.pyenv"
+        version: "master"
+        update: yes
+      become: true
+      become_user: "{{ users.primary_user }}"
+
+    - name: pyenv | Init dans .zshrc
+      ansible.builtin.blockinfile:
+        path: "/home/{{ users.primary_user }}/.zshrc"
+        marker: "# {mark} ANSIBLE-PYENV"
+        block: |
+          export PYENV_ROOT="$HOME/.pyenv"
+          export PATH="$PYENV_ROOT/bin:$PATH"
+          eval "$(pyenv init -)"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    # -------- SUPPLÉMENTS DEV PACK: Web/JS toolchain --------
+    - name: Deno | Installer (Debian/Ubuntu via script)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ ! -x "$HOME/.deno/bin/deno" ]; then
+          curl -fsSL https://deno.land/install.sh | sh -s -- -q
+        fi
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    - name: Deno | Arch installé via paquet — rien à faire
+      ansible.builtin.debug:
+        msg: "Deno installé via paquet Arch."
+      when: ansible_distribution == "Archlinux"
+
+    - name: Bun | Installer (Debian/Ubuntu via script)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ ! -x "$HOME/.bun/bin/bun" ]; then
+          curl -fsSL https://bun.sh/install | bash
+        fi
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    # -------- SUPPLÉMENTS DEV PACK: Rust --------
+    - name: Rust | Installer rustup (Debian/Ubuntu, profil minimal)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+        fi
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      when: ansible_os_family == "Debian"
+      changed_when: false
+
+    - name: Rust | Définir toolchain stable par défaut (toutes distros)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        "$HOME/.cargo/bin/rustup" default stable || rustup default stable || true
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      environment:
+        PATH: "/home/{{ users.primary_user }}/.cargo/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    - name: Rust | Ajouter cargo au PATH dans .zshrc
+      ansible.builtin.blockinfile:
+        path: "/home/{{ users.primary_user }}/.zshrc"
+        marker: "# {mark} ANSIBLE-RUST"
+        block: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    - name: Go | Définir GOPATH et PATH
+      ansible.builtin.blockinfile:
+        path: "/home/{{ users.primary_user }}/.zshrc"
+        marker: "# {mark} ANSIBLE-GO"
+        block: |
+          export GOPATH="$HOME/go"
+          export PATH="$GOPATH/bin:$PATH"
+        owner: "{{ users.primary_user }}"
+        group: "{{ users.primary_user }}"
+        mode: "0644"
+
+    # -------- Conteneurs/virt désactivés en mode rapide --------
+    - name: Docker/Libvirt | Skip (mode rapide)
+      ansible.builtin.debug:
+        msg: "Containers et virtualisation désactivés pour accélérer la première passe."
+      when: not features.containers_ecosystem and not features.virtualization_stack
+
+    # -------- AUR extra (Arch) via yay --------
+    - name: AUR | Installer paquets supplémentaires via yay
+      ansible.builtin.shell: |
+        set -euo pipefail
+        yay -S --needed --noconfirm --sudoloop --answerdiff N --answerclean N {{ item }}
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: "{{ users.primary_user }}"
+      loop: "{{ aur_extra_packages | default([]) }}"
+      register: aur_extra_installs
+      changed_when: >
+        aur_extra_installs.results | selectattr('stdout','defined') | selectattr('stdout','search','(?i)there is nothing to do') | list | length < (aur_extra_installs.results | length)
+      when:
+        - ansible_distribution == "Archlinux"
+        - features.install_aur_extra | default(false)
+
+    # -------- Réseau: permissions wireshark --------
+    - name: Wireshark | Ajouter utilisateur au groupe wireshark
+      ansible.builtin.user:
+        name: "{{ users.primary_user }}"
+        groups: wireshark
+        append: true
+      ignore_errors: true
+
+  post_tasks:
+    - name: APT | Relancer les timers apt-daily
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+      when: ansible_pkg_mgr == "apt"
+      changed_when: false
+      failed_when: false

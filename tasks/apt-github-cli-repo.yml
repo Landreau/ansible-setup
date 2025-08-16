@@ -1,0 +1,16 @@
+---
+- name: GitHub CLI | Ajouter la clé GPG
+  ansible.builtin.get_url:
+    url: https://cli.github.com/packages/githubcli-archive-keyring.gpg
+    dest: /usr/share/keyrings/githubcli-archive-keyring.gpg
+    mode: "0644"
+
+- name: GitHub CLI | Ajouter le dépôt APT (Debian/Ubuntu)
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
+    filename: "github-cli"
+    state: present
+
+- name: GitHub CLI | Mettre à jour le cache APT
+  ansible.builtin.apt:
+    update_cache: yes
