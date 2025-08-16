@@ -1,5 +1,4 @@
 ---
-# Construit la liste de paquets effectifs pour CETTE machine
 - name: Preflight | Construire liste de paquets effectifs pour cette distro
   ansible.builtin.set_fact:
     pkgs_effective: >-
