@@ -16,7 +16,7 @@ i3:
   backup_existing: true
   configure_autotiling: true
 
-# Le préflight ne bloque pas l'exécution par défaut (peut être activé à true)
+
 preflight_fail: false
 
 features:
@@ -71,18 +71,18 @@ packages:
     - neovim
     - mpv
     - zsh
-    - python3          # Arch remap -> python
+    - python3          
     - ripgrep
     - make
     - xclip
     - gcc
-    - dwm              # Arch via yay: dwm-git
+    - dwm             
     - unzip
     - direnv
     - zoxide
-    - starship         # Debian/Ubuntu via script, Arch via pacman
+    - starship         
     - btop
-    - tldr             # Arch remap -> tealdeer
+    - tldr             
     - shellcheck
     - shfmt
     - cmake
@@ -91,14 +91,14 @@ packages:
     - gdb
     - valgrind
     - cppcheck
-    - clang-format     # Arch: fourni par clang (filtré)
-    - clang-tidy       # Arch: fourni par clang (filtré)
+    - clang-format     
+    - clang-tidy      
     - jq
     - yq
     - httpie
     - nmap
     - iperf3
-    - wireshark        # Arch remap -> wireshark-qt (ou -cli)
+    - wireshark       
     - mitmproxy
     - rofi
     - dmenu
