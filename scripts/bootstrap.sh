@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Bootstrap cross-distro: installe Ansible + Git, clone le dépôt et lance le playbook.
-# Utilisation (recommandé) :
-#   REPO_URL="https://github.com/<owner>/<repo>.git" bash -c "$(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.sh)"
-# Ou en local si vous avez déjà cloné le repo :
-#   ./scripts/bootstrap.sh  (dans ce cas, REPO_URL est ignoré et on suppose que setup.yml est dans le répertoire courant)
 
 set -euo pipefail
 
