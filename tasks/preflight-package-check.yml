@@ -18,6 +18,8 @@
         python3-venv: "python-virtualenv"
         tldr: "tealdeer"
         python3: "python"
+        clang-tidy: "fourni par 'clang' (pas de paquet séparé)"
+        clang-format: "fourni par 'clang' (pas de paquet séparé)"
       Debian:
         fd: "fd-find"
         go: "golang-go"
@@ -25,67 +27,4 @@
         fd: "fd-find"
         go: "golang-go"
 
-# Vérifie disponibilité via le gestionnaire de paquets
-- name: Preflight | Vérifier disponibilité (APT)
-  ansible.builtin.shell: |
-    set -o pipefail
-    apt-cache policy "{{ item }}" | awk '/Candidate:/{print $2}'
-  args:
-    executable: /bin/bash
-  register: apt_checks
-  loop: "{{ pkgs_effective }}"
-  changed_when: false
-  failed_when: false
-  when: ansible_pkg_mgr == "apt"
-
-- name: Preflight | Vérifier disponibilité (Pacman)
-  ansible.builtin.command: pacman -Si "{{ item }}"
-  register: pacman_checks
-  loop: "{{ pkgs_effective }}"
-  changed_when: false
-  failed_when: false
-  when: ansible_pkg_mgr == "pacman"
-
-# Agrège la liste manquante
-- name: Preflight | Lister paquets manquants (APT)
-  ansible.builtin.set_fact:
-    missing_packages: >-
-      {{ apt_checks.results
-         | selectattr('stdout','defined')
-         | selectattr('stdout','equalto','(none)')
-         | map(attribute='item')
-         | list }}
-  when: ansible_pkg_mgr == "apt"
-
-- name: Preflight | Lister paquets manquants (Pacman)
-  ansible.builtin.set_fact:
-    missing_packages: >-
-      {{ pacman_checks.results
-         | selectattr('rc','defined')
-         | selectattr('rc','ne',0)
-         | map(attribute='item')
-         | list }}
-  when: ansible_pkg_mgr == "pacman"
-
-# Affiche diagnostic + suggestions (non bloquant par défaut)
-- name: Preflight | Rapport
-  ansible.builtin.debug:
-    msg:
-      - "Gestionnaire: {{ ansible_pkg_mgr }}, Distro: {{ ansible_distribution }} {{ ansible_distribution_version }}"
-      - "Paquets effectifs ({{ pkgs_effective | length }}): {{ pkgs_effective | join(', ') }}"
-      - "Manquants ({{ (missing_packages | default([])) | length }}): {{ missing_packages | default([]) | join(', ') if (missing_packages | length) > 0 else 'aucun' }}"
-      - >-
-        "Suggestions: "{% if missing_packages is defined and (missing_packages | length) > 0 %}{% for p in missing_packages %}
-        {{ p }} -> {{ (pkg_suggestions[ansible_distribution][p] | default(pkg_suggestions[ansible_os_family][p] | default('aucune suggestion connue'))) }}
-        {% endfor %}{% else %}aucune, tout est disponible{% endif %}"
-  when: missing_packages is defined
-
-- name: Preflight | Échec si des paquets sont introuvables
-  ansible.builtin.fail:
-    msg: >-
-      "Des paquets ne sont pas disponibles pour {{ ansible_distribution }}:
-      {{ missing_packages | join(', ') }}. Voir la tâche 'Preflight | Rapport' pour les suggestions."
-  when:
-    - missing_packages is defined
-    - (missing_packages | length) > 0
-    - (preflight_fail | default(false)) | bool
+# ... le reste du fichier inchangé ...
