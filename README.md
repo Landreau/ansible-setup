@@ -6,9 +6,6 @@ Playbook pour provisionner une machine de dev:
 - Préflight non bloquant
 
 ## One‑liner
-Remplacez `<owner>/<repo>`:
 ```bash
-REPO_URL="https://github.com/<owner>/<repo>.git" bash -c "$(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.sh)"
-```
 
-Ou suivez docs/INSTALL.md pour d’autres options.
+```
